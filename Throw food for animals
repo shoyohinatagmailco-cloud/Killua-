@@ -1,0 +1,495 @@
+-- KILLUA HUB | Final Fix
+-- Auto Throw + Auto Equip + Auto Train (Strictly Find Area & Walk) + Circle Minimize
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local PlayerGui = player:WaitForChild("PlayerGui")
+local PlayerScripts = player:WaitForChild("PlayerScripts")
+
+-- Safe loading ng Controllers
+local ok, err = pcall(function()
+	local Controllers = PlayerScripts:WaitForChild("Client"):WaitForChild("Controllers")
+	_G.ThrowMeter = require(Controllers:WaitForChild("ThrowMeter"))
+	_G.ClientState = require(Controllers:WaitForChild("ClientState"))
+end)
+
+if not ok then
+	warn("Hindi ma-load ang ThrowMeter/ClientState. Siguraduhing nasa laro ka.")
+end
+
+local Remotes = ReplicatedStorage:FindFirstChild("Packages") and ReplicatedStorage.Packages:FindFirstChild("_Index") 
+	and ReplicatedStorage.Packages._Index:FindFirstChild("knit") and ReplicatedStorage.Packages._Index.knit:FindFirstChild("Services") 
+	or ReplicatedStorage:FindFirstChild("Remotes") or ReplicatedStorage
+
+-- ==========================================
+-- 1. STATE VARIABLES & LOGIC
+-- ==========================================
+local enabled = false
+local gen = 0
+local spotX = nil
+local tapDelay = 0.8
+local stats = { done = 0, failed = 0 }
+local autoEquipPetEnabled = false
+local autoTrainEnabled = false 
+
+if _G.ThrowMeter then
+	if not _G.ThrowMeter.__SNOrig then
+		_G.ThrowMeter.__SNOrig = _G.ThrowMeter.Run
+	end
+	local origRun = _G.ThrowMeter.__SNOrig
+	_G.ThrowMeter.Run = function(self, ...)
+		if enabled then
+			self.Locked = true
+			_G.ThrowMeter.TestAutoTap = tapDelay
+		else
+			_G.ThrowMeter.TestAutoTap = nil
+		end
+		return origRun(self, ...)
+	end
+end
+
+local function getChar()
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if root and hum and hum.Health > 0 then
+		return char, root, hum
+	end
+end
+
+local function groundUnder(pos, ignore)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignore
+	local hit = workspace:Raycast(pos + Vector3.new(0, 50, 0), Vector3.new(0, -300, 0), params)
+	return hit and hit.Position or nil
+end
+
+local function crossLine()
+	local char, root, hum = getChar()
+	if not root then return false end
+	local area = workspace:FindFirstChild("StarterArea")
+	local line = area and area:FindFirstChild("CrossLine")
+	if not line then return false end
+	if hum.SeatPart then
+		hum.Sit = false
+		task.wait(0.2)
+	end
+	local halfX = area.Size.X / 2
+	local x = math.clamp(spotX or root.Position.X, area.Position.X - halfX + 2, area.Position.X + halfX - 2)
+	local z = line.Position.Z - 1.5
+	local ground = groundUnder(Vector3.new(x, area.Position.Y + area.Size.Y / 2, z), { char })
+	if not ground then return false end
+	local pos = ground + Vector3.new(0, hum.HipHeight + root.Size.Y / 2 + 0.1, 0)
+	char:PivotTo(CFrame.lookAt(pos, pos + Vector3.new(0, 0, -1)))
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	return true
+end
+
+-- ==========================================
+-- 2. AUTO TRAIN LOGIC (Strictly Find & Walk)
+-- ==========================================
+local function findTrainArea()
+    -- Hahanapin ang area na may "train", "gym", o "workout" sa pangalan
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local name = string.lower(obj.Name)
+            if name:find("train") or name:find("gym") or name:find("workout") then
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if autoTrainEnabled then
+            local char, root, hum = getChar()
+            if char and hum then
+                local trainArea = findTrainArea()
+                if trainArea then
+                    local distance = (root.Position - trainArea.Position).Magnitude
+                    if distance > 6 then
+                        -- Maglakad papunta sa train area
+                        hum:MoveTo(trainArea.Position)
+                        setStatus("Walking to Train Area...")
+                    else
+                        -- Pag malapit na, pahintuin
+                        hum:MoveTo(root.Position) 
+                        setStatus("Arrived at Train Area.")
+                    end
+                else
+                    setStatus("Train Area not found.")
+                end
+            end
+		end
+	end
+end)
+
+-- ==========================================
+-- 3. UI CREATION
+-- ==========================================
+if PlayerGui:FindFirstChild("KilluaHubUI") then
+	PlayerGui.KilluaHubUI:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "KilluaHubUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 230, 0, 270) 
+MainFrame.Position = UDim2.new(0.5, -115, 0.5, -135)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.ZIndex = 5
+MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(160, 175, 200)
+MainStroke.Thickness = 1.2
+MainStroke.Transparency = 0.35
+MainStroke.Parent = MainFrame
+
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 30)
+TopBar.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+TopBar.BackgroundTransparency = 0.1
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -70, 1, 0)
+Title.Position = UDim2.new(0, 10, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "KILLUA HUB"
+Title.TextColor3 = Color3.fromRGB(240, 245, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 12
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TopBar
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 30, 0, 30)
+MinBtn.Position = UDim2.new(1, -60, 0, 0)
+MinBtn.BackgroundTransparency = 1
+MinBtn.Text = "-"
+MinBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 20
+MinBtn.Parent = TopBar
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -30, 0, 0)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(220, 80, 80)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 20
+CloseBtn.Parent = TopBar
+
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -20, 1, -40)
+Content.Position = UDim2.new(0, 10, 0, 35)
+Content.BackgroundTransparency = 1
+Content.Parent = MainFrame
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, 0, 0, 22)
+StatusLabel.Position = UDim2.new(0, 0, 0, 0)
+StatusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+StatusLabel.BackgroundTransparency = 0.2
+StatusLabel.Text = "Status: Idle"
+StatusLabel.TextColor3 = Color3.fromRGB(185, 195, 210)
+StatusLabel.Font = Enum.Font.GothamMedium
+StatusLabel.TextSize = 11
+StatusLabel.Parent = Content
+Instance.new("UICorner", StatusLabel).CornerRadius = UDim.new(0, 5)
+
+function setStatus(text)
+	StatusLabel.Text = text
+end
+
+local function createButton(name, posY)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 28)
+	btn.Position = UDim2.new(0, 0, 0, posY)
+	btn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+	btn.Text = name
+	btn.TextColor3 = Color3.fromRGB(210, 215, 225)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 11
+	btn.Parent = Content
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	local stroke = Instance.new("UIStroke", btn)
+	stroke.Color = Color3.fromRGB(60, 60, 75)
+	stroke.Thickness = 1
+	return btn
+end
+
+local ToggleBtn = createButton("Auto Throw: OFF", 30)
+local EquipBtn = createButton("Auto Equip Best: OFF", 62)
+local TrainBtn = createButton("Auto Train: OFF", 94)
+local LaneBtn = createButton("Set Throw Lane (Current X)", 126)
+
+local SliderFrame = Instance.new("Frame")
+SliderFrame.Size = UDim2.new(1, 0, 0, 40)
+SliderFrame.Position = UDim2.new(0, 0, 0, 162)
+SliderFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+SliderFrame.BackgroundTransparency = 0.2
+SliderFrame.Parent = Content
+Instance.new("UICorner", SliderFrame).CornerRadius = UDim.new(0, 6)
+
+local SliderText = Instance.new("TextLabel")
+SliderText.Size = UDim2.new(1, -16, 0, 18)
+SliderText.Position = UDim2.new(0, 8, 0, 3)
+SliderText.BackgroundTransparency = 1
+SliderText.Text = "Auto-Tap Delay: 0.8s"
+SliderText.TextColor3 = Color3.fromRGB(210, 215, 225)
+SliderText.Font = Enum.Font.GothamMedium
+SliderText.TextSize = 11
+SliderText.TextXAlignment = Enum.TextXAlignment.Left
+SliderText.Parent = SliderFrame
+
+local SliderBar = Instance.new("TextButton")
+SliderBar.Size = UDim2.new(1, -16, 0, 8)
+SliderBar.Position = UDim2.new(0, 8, 0, 26)
+SliderBar.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+SliderBar.Text = ""
+SliderBar.AutoButtonColor = false
+SliderBar.Parent = SliderFrame
+Instance.new("UICorner", SliderBar).CornerRadius = UDim.new(1, 0)
+
+local SliderFill = Instance.new("Frame")
+SliderFill.Size = UDim2.new((0.8 - 0.4) / (2.0 - 0.4), 0, 1, 0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(220, 230, 255)
+SliderFill.BorderSizePixel = 0
+SliderFill.Parent = SliderBar
+Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(1, 0)
+
+-- BILOG NA BUTTON
+local FloatBtn = Instance.new("TextButton")
+FloatBtn.Name = "FloatBtn"
+FloatBtn.Size = UDim2.new(0, 50, 0, 50)
+FloatBtn.Position = UDim2.new(0, 20, 0.5, -25)
+FloatBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+FloatBtn.Text = "K"
+FloatBtn.TextColor3 = Color3.fromRGB(160, 175, 200)
+FloatBtn.Font = Enum.Font.GothamBlack
+FloatBtn.TextSize = 24
+FloatBtn.Visible = false
+FloatBtn.ZIndex = 10
+FloatBtn.Parent = ScreenGui
+Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1, 0)
+
+local FloatStroke = Instance.new("UIStroke")
+FloatStroke.Color = Color3.fromRGB(160, 175, 200)
+FloatStroke.Thickness = 2
+FloatStroke.Parent = FloatBtn
+
+-- ==========================================
+-- 4. CONNECTIONS
+-- ==========================================
+
+local function loop(myGen)
+	local function active() return gen == myGen and enabled end
+	while active() do
+		local t0 = os.clock()
+		while active() and _G.ClientState.Busy and os.clock() - t0 < 60 do task.wait(0.25) end
+		if not active() then break end
+
+		local started = false
+		for _ = 1, 4 do
+			if not active() then break end
+			crossLine()
+			local t1 = os.clock()
+			while os.clock() - t1 < 3 do
+				if _G.ClientState.Busy == "Throw" then started = true break end
+				task.wait(0.1)
+			end
+			if started then break end
+		end
+
+		if started then
+			setStatus(("Throwing... | Done: %d"):format(stats.done))
+			local t2 = os.clock()
+			while _G.ClientState.Busy == "Throw" and os.clock() - t2 < 60 do task.wait(0.2) end
+			stats.done += 1
+			setStatus(("Done: %d | Failed: %d"):format(stats.done, stats.failed))
+			task.wait(1)
+		else
+			stats.failed += 1
+			setStatus(("Busy | Done: %d | Fail: %d"):format(stats.done, stats.failed))
+			task.wait(2)
+		end
+	end
+	setStatus("Status: Idle")
+end
+
+ToggleBtn.MouseButton1Click:Connect(function()
+	enabled = not enabled
+	gen += 1
+	if enabled then
+		ToggleBtn.Text = "Auto Throw: ON"
+		ToggleBtn.BackgroundColor3 = Color3.fromRGB(225, 232, 245)
+		ToggleBtn.TextColor3 = Color3.fromRGB(15, 15, 20)
+		if not spotX then
+			local _, root = getChar()
+			if root then spotX = root.Position.X end
+		end
+		task.spawn(loop, gen)
+	else
+		ToggleBtn.Text = "Auto Throw: OFF"
+		ToggleBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+		ToggleBtn.TextColor3 = Color3.fromRGB(210, 215, 225)
+		if _G.ThrowMeter then _G.ThrowMeter.TestAutoTap = nil end
+	end
+end)
+
+-- Auto Equip Loop
+task.spawn(function()
+	while true do
+		task.wait(3)
+		if autoEquipPetEnabled then
+			pcall(function()
+				for _, v in ipairs(Remotes:GetDescendants()) do
+					if v:IsA("RemoteEvent") and (v.Name:lower():find("pet") or v.Name:lower():find("equip")) then
+						v:FireServer("Best")
+					elseif v:IsA("RemoteFunction") and (v.Name:lower():find("pet") or v.Name:lower():find("equip")) then
+						v:InvokeServer("Best")
+					end
+				end
+			end)
+		end
+	end
+end)
+
+EquipBtn.MouseButton1Click:Connect(function()
+	autoEquipPetEnabled = not autoEquipPetEnabled
+	EquipBtn.Text = autoEquipPetEnabled and "Auto Equip Best: ON" or "Auto Equip Best: OFF"
+	EquipBtn.BackgroundColor3 = autoEquipPetEnabled and Color3.fromRGB(225, 232, 245) or Color3.fromRGB(25, 25, 35)
+	EquipBtn.TextColor3 = autoEquipPetEnabled and Color3.fromRGB(15, 15, 20) or Color3.fromRGB(210, 215, 225)
+end)
+
+-- Auto Train Connection
+TrainBtn.MouseButton1Click:Connect(function()
+	autoTrainEnabled = not autoTrainEnabled
+	TrainBtn.Text = autoTrainEnabled and "Auto Train: ON" or "Auto Train: OFF"
+	TrainBtn.BackgroundColor3 = autoTrainEnabled and Color3.fromRGB(225, 232, 245) or Color3.fromRGB(25, 25, 35)
+	TrainBtn.TextColor3 = autoTrainEnabled and Color3.fromRGB(15, 15, 20) or Color3.fromRGB(210, 215, 225)
+    if not autoTrainEnabled then
+        local char, root, hum = getChar()
+        if hum then hum:MoveTo(root.Position) end -- Pahintuin ang paglakad
+        setStatus("Status: Idle")
+    end
+end)
+
+LaneBtn.MouseButton1Click:Connect(function()
+	local _, root = getChar()
+	if root then
+		spotX = root.Position.X
+		setStatus(("Lane Saved: X = %.1f"):format(spotX))
+	end
+end)
+
+-- Slider Logic
+local draggingSlider = false
+local function updateSlider(input)
+	local relX = math.clamp((input.Position.X - SliderBar.AbsolutePosition.X) / SliderBar.AbsoluteSize.X, 0, 1)
+	local val = 0.4 + (relX * (2.0 - 0.4))
+	val = math.floor(val * 10 + 0.5) / 10
+	tapDelay = val
+	SliderFill.Size = UDim2.new(relX, 0, 1, 0)
+	SliderText.Text = ("Auto-Tap Delay: %.1fs"):format(tapDelay)
+end
+
+SliderBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingSlider = true
+		updateSlider(input)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		updateSlider(input)
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingSlider = false
+	end
+end)
+
+-- Minimize / Maximize Logic
+MinBtn.MouseButton1Click:Connect(function()
+	MainFrame.Visible = false
+	FloatBtn.Visible = true
+end)
+
+FloatBtn.MouseButton1Click:Connect(function()
+	MainFrame.Visible = true
+	FloatBtn.Visible = false
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+	enabled = false
+	autoEquipPetEnabled = false
+    autoTrainEnabled = false
+	if _G.ThrowMeter then _G.ThrowMeter.TestAutoTap = nil end
+	ScreenGui:Destroy()
+end)
+
+-- Dragging Logic
+local dragging, dragInput, dragStart, startPos
+
+local function makeDraggable(frame, dragPart)
+	dragPart.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+		end
+	end)
+
+	dragPart.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+end
+
+makeDraggable(MainFrame, TopBar)
+makeDraggable(FloatBtn, FloatBtn)
